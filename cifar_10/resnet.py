@@ -6,9 +6,10 @@ from tensorflow.keras.datasets.cifar10 import load_data
 from tensorflow.keras.layers import BatchNormalization, Conv2D, Activation, Dense, GlobalAveragePooling2D,\
 MaxPooling2D, ZeroPadding2D, Add, ZeroPadding3D
 from tensorflow.keras import Model
-
+from matplotlib import pyplot as plt
 
 ## solve
+## Here to https://github.com/tensorflow/tensorflow/issues/25138#issuecomment-559339162
 from tensorflow.compat.v1 import ConfigProto
 from tensorflow.compat.v1 import InteractiveSession
 
@@ -27,19 +28,13 @@ def dataset():
 	# Load CIFAR-10 
 	(x_train, y_train), (x_test, y_test) = load_data()
 
-	# # one_hot_encoding
+	# one_hot_encoding
 	y_train = tf.one_hot(y_train, 10)
 	y_test = tf.one_hot(y_test, 10)
 
-	# 0~ 255 -> 0~1
-	x_train = x_train / 255
-	y_train = y_train / 255
-	x_test = x_test / 255
-	y_test = y_test / 255
-
 	# Trainset(50k) -> train(45k) + validation(5k)
-	x_val = x_train[-5000:] / 255
-	y_val = y_train[-5000:] / 255
+	x_val = x_train[-5000:]
+	y_val = y_train[-5000:] 
 
 	return x_train[:45000], y_train[:45000], x_test, y_test, x_val, y_val
 	
@@ -100,7 +95,7 @@ class Resnet():
 		# Used to shape. Because we use 'sparse_categorical_crossentropy' loss function.
 		# See here https://www.tensorflow.org/api_docs/python/tf/keras/losses/sparse_categorical_crossentropy
 		# Original shape : (?, 10) -> (?, 10, 1)
-		m = tf.expand_dims(m,axis=2)
+		m = tf.expand_dims(m,axis=1)
 		self.prints(inputs, m, 'Full')
 
 		# Make keras.Model()
@@ -124,7 +119,12 @@ class Resnet():
 
 
 	def residual_block(self, m, n, filter, first=False):
-	
+		'''
+			m : Input keras model
+			n : The number of residual block
+			filter : The number of residual block's filter
+			first : Check as if first residual block
+		'''
 		if not first:
 			m = MaxPooling2D((1,1),2)(m)
 
@@ -134,7 +134,7 @@ class Resnet():
 			if not first and i == 0:
 				shortcut = Conv2D(filters=filter, kernel_size=(1,1), padding='same')(shortcut)
 				shortcut = BatchNormalization()(shortcut)
-				print(shortcut)
+				
 			m = Conv2D(filters=filter, kernel_size=(3,3), padding='same')(m)
 			m = BatchNormalization()(m)
 			m = Activation('relu')(m)
@@ -147,16 +147,18 @@ class Resnet():
 
 		return m, outputs
 
-	def compile(self, lr, decay, momentum):
+	def compile(self,decay):
 		'''
 			lr : Learning rate Schedule
 			decay : Weight decay
 			momentum : momentum
 		'''
-		return self.model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=lr, beta_1=momentum, decay=decay),loss='sparse_categorical_crossentropy',
+		return self.model.compile(
+			optimizer=tf.keras.optimizers.Adam(decay=decay),
+			loss='categorical_crossentropy',
 			metrics=['acc'])
 
-	def fit(self, x, y, epoch, batch_size, validation_data, val_step, callbacks):
+	def fit(self, trainset, epoch,steps_per_epoch,  validation_data, val_step, callbacks):
 		'''
 			x : input image
 			y : input labels
@@ -166,60 +168,107 @@ class Resnet():
 			val_step : validation step
 			callbacks : callbacks function
 		'''
-		return self.model.fit(x, y, epochs=epoch, batch_size=batch_size, 
+		return self.model.fit(trainset, epochs=epoch, steps_per_epoch=steps_per_epoch,
 			validation_data=validation_data, validation_steps=val_step, callbacks=callbacks)
 
-	def evaluate(self, x, y, batch_size=32):
+	def evaluate(self, x, batch_size=32):
 		'''
 			x : test image
 			y : test label
 			batch_size : batch size
 		'''
-		return self.model.evaluate(x, y, batch_size=batch_size)
+		return self.model.evaluate(x)
 
 # train parameter
-logs = './log'
-Iter = 64000
-Batch_size = 64
+logs = './log/Data_Augmentation/ResNet20'
+Iter = 64000 
+Batch_size = 32
 Trainset = 45000
-Epoch = int(Batch_size * Trainset / Iter)
+Epoch = 100
 model_size = 3 
+
+
+# Adam parameter
+#lr = 0.1
+decay = 0.0001
+#momentum = 0.9
+
+# Learning rate Schedule
+def scheduler(epoch):
+	lr = 0.001
+	if epoch < 45:
+		lr =  0.1
+	elif epoch < 69:
+		lr = 0.01
+	else:
+		lr = 0.001
+
+	tf.summary.scalar('learning rate', data=lr, step=epoch)
+	print('Epoch: {}\t LR: {}'.format(epoch,lr))
+	return lr
+
+# Past Learning Rate Schedule
+# step = tf.Variable(0, trainable=False)
+# boundaries = [32000, 48000]
+# values = [0.1, 0.01, 0.001]
+# learning_rate_fn = tf.keras.optimizers.schedules.PiecewiseConstantDecay(
+#         boundaries, values)
+# lr = learning_rate_fn(step)
+
+
 callbacks = [
   # Write TensorBoard logs to `./logs` directory
   tf.keras.callbacks.TensorBoard(log_dir=logs, write_images=True),
   tf.keras.callbacks.ModelCheckpoint(filepath=logs),
+  #tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=10),
+  tf.keras.callbacks.LearningRateScheduler(scheduler),
 ]
-
-# Adam parameter
-lr = 0.01
-decay = 0.0001
-momentum = 0.9
-
-# Learning rate Schedule
-step = tf.Variable(0, trainable=False)
-boundaries = [32000, 48000]
-values = [0.1, 0.01, 0.001]
-learning_rate_fn = tf.keras.optimizers.schedules.PiecewiseConstantDecay(
-        boundaries, values)
-lr = learning_rate_fn(step)
 
 # Make Dataset
 x_train, y_train, x_test, y_test, x_val, y_val = dataset()
+
+# Data Augmentation
+train_dataset = tf.data.Dataset.from_tensor_slices((x_train, y_train)).batch(Batch_size).shuffle(10000)
+train_dataset = train_dataset.map(lambda x,y: (tf.cast(x,tf.float32) / 255., y))
+# train_dataset = train_dataset.map(lambda x,y: (tf.image.pad_to_bounding_box(x, 4, 4, 40, 40), y))
+# train_dataset = train_dataset.map(lambda x,y: (tf.image.random_crop(x, [Batch_size, 32, 32, 3]), y))
+train_dataset = train_dataset.map(lambda x,y: (tf.image.random_flip_left_right(x), y))
+train_dataset = train_dataset.repeat()
+
+validation_dataset = tf.data.Dataset.from_tensor_slices((x_val, y_val)).batch(Batch_size).shuffle(10000)
+validation_dataset = validation_dataset.map(lambda x,y: (tf.cast(x,tf.float32) / 255., y))
+validation_dataset = validation_dataset.repeat()
+
+test_dataset = tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(Batch_size)
+test_dataset = test_dataset.map(lambda x, y: (tf.cast(x, tf.float32) / 255, y))
+
+## View Data augmentation image.
+# for i, element in enumerate(train_dataset):
+# 	image = element[0][0] * 255.
+# 	label = element[1]
+# 	image = np.array(image)
+	
+# 	print(image.shape)	
+# 	print(label)	
+# 	plt.imshow(image)
+# 	plt.show()
+# 	if i == 10:
+# 		break
 
 # Make Model
 model = Resnet(model_size, 'resnet')
 
 # compiling
-compiles = model.compile(lr, decay, momentum)
+compiles = model.compile(decay)
 
 # training
 # Iter 64k 
 # Batch 64 -> Paper's batch is 128 with 2-gpu. Use 64 batch size because my gpu is 1.
 # Trainset 45k
-# Batch * Trainset / Iter  => 64 * 45000 / 64000 = 45epochs
-fit = model.fit(x_train, y_train, Epoch, Batch_size, [x_val,y_val], 3, callbacks)
+# Batch * Trainset / Iter  => 64 * 45000 / 64000 = 45 epochs
+fit = model.fit(train_dataset, Epoch, 200, validation_dataset, 3, callbacks)
 
 # Model evaluate
-results = model.evaluate(x_test, y_test)
+results = model.evaluate(test_dataset)
 print('test loss, test acc: {}'.format(results))
 
