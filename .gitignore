@@ -5,3 +5,6 @@ dataset.py
 # no log file
 /cifar_10/log
 
+# no cpython file
+__pycache__
+

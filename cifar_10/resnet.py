@@ -171,7 +171,7 @@ class Resnet():
 		return self.model.fit(trainset, epochs=epoch, steps_per_epoch=steps_per_epoch,
 			validation_data=validation_data, validation_steps=val_step, callbacks=callbacks)
 
-	def evaluate(self, x, batch_size=32):
+	def evaluate(self, x):
 		'''
 			x : test image
 			y : test label
@@ -179,96 +179,109 @@ class Resnet():
 		'''
 		return self.model.evaluate(x)
 
-# train parameter
-logs = './log/Data_Augmentation/ResNet20'
-Iter = 64000 
-Batch_size = 32
-Trainset = 45000
-Epoch = 100
-model_size = 3 
+	def load_weights(self, dir, decay):
+		'''
+			dir : log direction path
+			decay : It is necessary to compile.
+		'''
+		self.compile(decay)
+		self.model.load_weights(dir)
 
 
-# Adam parameter
-#lr = 0.1
-decay = 0.0001
-#momentum = 0.9
+if __name__ == "__main__":
+	# train parameter
+	logs = './log/Data_Augmentation/ResNet32_batch64'
+	Iter = 64000 
+	Batch_size = 64
+	Trainset = 45000
+	Epoch = 200
+	model_size = 5 
+	steps_per_epoch = Trainset / Batch_size
 
-# Learning rate Schedule
-def scheduler(epoch):
-	lr = 0.001
-	if epoch < 45:
-		lr =  0.1
-	elif epoch < 69:
-		lr = 0.01
-	else:
+
+	# Adam parameter
+	#lr = 0.1
+	decay = 0.0001
+	#momentum = 0.9
+
+	# Learning rate Schedule
+	def scheduler(epoch):
 		lr = 0.001
+		if epoch < 45:
+			lr =  0.1
+		elif epoch < 69:
+			lr = 0.01
+		else:
+			lr = 0.001
 
-	tf.summary.scalar('learning rate', data=lr, step=epoch)
-	print('Epoch: {}\t LR: {}'.format(epoch,lr))
-	return lr
+		tf.summary.scalar('learning rate', data=lr, step=epoch)
+		print('Epoch: {}\t LR: {}'.format(epoch,lr))
+		return lr
 
-# Past Learning Rate Schedule
-# step = tf.Variable(0, trainable=False)
-# boundaries = [32000, 48000]
-# values = [0.1, 0.01, 0.001]
-# learning_rate_fn = tf.keras.optimizers.schedules.PiecewiseConstantDecay(
-#         boundaries, values)
-# lr = learning_rate_fn(step)
+	# Past Learning Rate Schedule
+	# step = tf.Variable(0, trainable=False)
+	# boundaries = [32000, 48000]
+	# values = [0.1, 0.01, 0.001]
+	# learning_rate_fn = tf.keras.optimizers.schedules.PiecewiseConstantDecay(
+	#         boundaries, values)
+	# lr = learning_rate_fn(step)
 
+	# Callbacks Functions
+	callbacks = [
+	  # Write TensorBoard logs to `./logs` directory
+	  tf.keras.callbacks.TensorBoard(log_dir=logs, write_images=True),
+	  tf.keras.callbacks.ModelCheckpoint(filepath=logs, save_weights_only=True),
+	  #tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=20),
+	  tf.keras.callbacks.LearningRateScheduler(scheduler),
+	]
 
-callbacks = [
-  # Write TensorBoard logs to `./logs` directory
-  tf.keras.callbacks.TensorBoard(log_dir=logs, write_images=True),
-  tf.keras.callbacks.ModelCheckpoint(filepath=logs),
-  #tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=10),
-  tf.keras.callbacks.LearningRateScheduler(scheduler),
-]
+	# Make Dataset
+	x_train, y_train, x_test, y_test, x_val, y_val = dataset()
 
-# Make Dataset
-x_train, y_train, x_test, y_test, x_val, y_val = dataset()
+	# Data Augmentation
+	train_dataset = tf.data.Dataset.from_tensor_slices((x_train, y_train)).batch(Batch_size).shuffle(10000)
+	train_dataset = train_dataset.map(lambda x,y: (tf.cast(x,tf.float32) / 255., y))
+	# train_dataset = train_dataset.map(lambda x,y: (tf.image.pad_to_bounding_box(x, 4, 4, 40, 40), y))
+	# train_dataset = train_dataset.map(lambda x,y: (tf.image.random_crop(x, [Batch_size, 32, 32, 3]), y))
+	train_dataset = train_dataset.map(lambda x,y: (tf.image.random_flip_left_right(x), y))
+	train_dataset = train_dataset.repeat()
 
-# Data Augmentation
-train_dataset = tf.data.Dataset.from_tensor_slices((x_train, y_train)).batch(Batch_size).shuffle(10000)
-train_dataset = train_dataset.map(lambda x,y: (tf.cast(x,tf.float32) / 255., y))
-# train_dataset = train_dataset.map(lambda x,y: (tf.image.pad_to_bounding_box(x, 4, 4, 40, 40), y))
-# train_dataset = train_dataset.map(lambda x,y: (tf.image.random_crop(x, [Batch_size, 32, 32, 3]), y))
-train_dataset = train_dataset.map(lambda x,y: (tf.image.random_flip_left_right(x), y))
-train_dataset = train_dataset.repeat()
+	validation_dataset = tf.data.Dataset.from_tensor_slices((x_val, y_val)).batch(Batch_size).shuffle(10000)
+	validation_dataset = validation_dataset.map(lambda x,y: (tf.cast(x,tf.float32) / 255., y))
+	validation_dataset = validation_dataset.repeat()
 
-validation_dataset = tf.data.Dataset.from_tensor_slices((x_val, y_val)).batch(Batch_size).shuffle(10000)
-validation_dataset = validation_dataset.map(lambda x,y: (tf.cast(x,tf.float32) / 255., y))
-validation_dataset = validation_dataset.repeat()
+	test_dataset = tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(Batch_size)
+	test_dataset = test_dataset.map(lambda x, y: (tf.cast(x, tf.float32) / 255, y))
 
-test_dataset = tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(Batch_size)
-test_dataset = test_dataset.map(lambda x, y: (tf.cast(x, tf.float32) / 255, y))
+	## View Data augmentation image.
+	# for i, element in enumerate(train_dataset):
+	# 	image = element[0][0] * 255.
+	# 	label = element[1]
+	# 	image = np.array(image)
+		
+	# 	print(image.shape)	
+	# 	print(label)	
+	# 	plt.imshow(image)
+	# 	plt.show()
+	# 	if i == 10:
+	# 		break
 
-## View Data augmentation image.
-# for i, element in enumerate(train_dataset):
-# 	image = element[0][0] * 255.
-# 	label = element[1]
-# 	image = np.array(image)
-	
-# 	print(image.shape)	
-# 	print(label)	
-# 	plt.imshow(image)
-# 	plt.show()
-# 	if i == 10:
-# 		break
+	# Make Model
+	model = Resnet(model_size, 'resnet')
 
-# Make Model
-model = Resnet(model_size, 'resnet')
+	# compiling
+	compiles = model.compile(decay)
 
-# compiling
-compiles = model.compile(decay)
+	# training
+	# Iter 64k 
+	# Batch 64 -> Paper's batch is 128 with 2-gpu. Use 64 batch size because my gpu is 1.
+	# Trainset 45k
+	# Batch * Trainset / Iter  => 64 * 45000 / 64000 = 45 epochs
+	fit = model.fit(train_dataset, Epoch, steps_per_epoch, validation_dataset, 80, callbacks)
 
-# training
-# Iter 64k 
-# Batch 64 -> Paper's batch is 128 with 2-gpu. Use 64 batch size because my gpu is 1.
-# Trainset 45k
-# Batch * Trainset / Iter  => 64 * 45000 / 64000 = 45 epochs
-fit = model.fit(train_dataset, Epoch, 200, validation_dataset, 3, callbacks)
+	# # Model evaluate
+	# results = model.evaluate(test_dataset)
+	# print('test loss: {:0.4f}\ntest acc: {:0.4f}'.format(results[0], results[1]))
 
-# Model evaluate
-results = model.evaluate(test_dataset)
-print('test loss, test acc: {}'.format(results))
-
+	# tf.summary.scalar('test_acc', data=results[1])
+	# tf.summary.scalar('test_loss', data=results[0])
