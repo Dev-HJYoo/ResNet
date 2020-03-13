@@ -6,9 +6,11 @@ from resnet import Resnet
 if __name__ == "__main__":
 	# Test Parameter
 	Decay = 0.0001
+	momentum = 0.9
 	Batch_size = 64
-	model_size = 5
-	save_dir = './log/Data_Augmentation/ResNet32_batch64'
+	model_size = 9
+	save_dir = './log/ResNet' + str(model_size*6+2) + '_batch' + str(Batch_size) + '/'
+	
 
 	# Test Data Load
 	(x_train, y_train), (x_test, y_test) = load_data()
@@ -24,8 +26,15 @@ if __name__ == "__main__":
 	model = Resnet(model_size, 'Resnet')
 
 	# Load weights
-	model.load_weights(save_dir, Decay)
+	model.load_weights(save_dir, momentum, Decay)
 
 	# Evaluate Model with testset
 	loss, acc = model.evaluate(test_dataset)
+
+	# Save test result with tensorboard
+	writer = tf.summary.create_file_writer(save_dir+'tests')
+	with writer.as_default():
+		tf.summary.scalar('Test_Accuracy', data=acc, step=0)
+		tf.summary.scalar('Test_Loss', data=loss, step=0)
+
 	print("Loss : {:0.4f}\nAccuracy: {:0.4f}".format(loss, acc))

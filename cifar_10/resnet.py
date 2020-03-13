@@ -7,6 +7,8 @@ from tensorflow.keras.layers import BatchNormalization, Conv2D, Activation, Dens
 MaxPooling2D, ZeroPadding2D, Add, ZeroPadding3D
 from tensorflow.keras import Model
 from matplotlib import pyplot as plt
+from tensorflow.keras.preprocessing.image import ImageDataGenerator 
+
 
 ## solve
 ## Here to https://github.com/tensorflow/tensorflow/issues/25138#issuecomment-559339162
@@ -32,11 +34,7 @@ def dataset():
 	y_train = tf.one_hot(y_train, 10)
 	y_test = tf.one_hot(y_test, 10)
 
-	# Trainset(50k) -> train(45k) + validation(5k)
-	x_val = x_train[-5000:]
-	y_val = y_train[-5000:] 
-
-	return x_train[:45000], y_train[:45000], x_test, y_test, x_val, y_val
+	return x_train, y_train, x_test, y_test
 	
 
 class Resnet():
@@ -147,21 +145,20 @@ class Resnet():
 
 		return m, outputs
 
-	def compile(self,decay):
+	def compile(self, momentum, decay):
 		'''
 			lr : Learning rate Schedule
 			decay : Weight decay
 			momentum : momentum
 		'''
 		return self.model.compile(
-			optimizer=tf.keras.optimizers.Adam(decay=decay),
+			optimizer=tf.keras.optimizers.SGD(momentum=momentum,decay=decay),
 			loss='categorical_crossentropy',
 			metrics=['acc'])
 
 	def fit(self, trainset, epoch,steps_per_epoch,  validation_data, val_step, callbacks):
 		'''
-			x : input image
-			y : input labels
+			trainset : Use tf.data
 			epoch : total number of time(learning number)
 			batch_size : batch size
 			validation_data : validation data set
@@ -171,51 +168,51 @@ class Resnet():
 		return self.model.fit(trainset, epochs=epoch, steps_per_epoch=steps_per_epoch,
 			validation_data=validation_data, validation_steps=val_step, callbacks=callbacks)
 
-	def evaluate(self, x):
+	def evaluate(self, testset):
 		'''
-			x : test image
-			y : test label
+			x: test set
 			batch_size : batch size
 		'''
-		return self.model.evaluate(x)
+		return self.model.evaluate(testset)
 
-	def load_weights(self, dir, decay):
+	def load_weights(self, dir, momentum, decay):
 		'''
 			dir : log direction path
 			decay : It is necessary to compile.
 		'''
-		self.compile(decay)
+		self.compile(momentum, decay)
 		self.model.load_weights(dir)
-
 
 if __name__ == "__main__":
 	# train parameter
-	logs = './log/Data_Augmentation/ResNet32_batch64'
 	Iter = 64000 
 	Batch_size = 64
-	Trainset = 45000
+	train_num = 45000
 	Epoch = 200
-	model_size = 5 
-	steps_per_epoch = Trainset / Batch_size
+	model_size = 18 
+	steps_per_epoch = train_num / Batch_size
+	val_num = 5000
+	steps_val = val_num / Batch_size
+	logs = './log/ResNet'+ str(model_size*6+2)+'_batch'+ str(Batch_size)+'/'
+	generator_use = False
 
-
-	# Adam parameter
-	#lr = 0.1
+	# SGD parameter
 	decay = 0.0001
-	#momentum = 0.9
+	momentum = 0.9
 
 	# Learning rate Schedule
 	def scheduler(epoch):
 		lr = 0.001
-		if epoch < 45:
+
+		if epoch < 2: # Because of resnet 110
+			lr = 0.01
+		elif epoch < 45:
 			lr =  0.1
 		elif epoch < 69:
 			lr = 0.01
 		else:
 			lr = 0.001
 
-		tf.summary.scalar('learning rate', data=lr, step=epoch)
-		print('Epoch: {}\t LR: {}'.format(epoch,lr))
 		return lr
 
 	# Past Learning Rate Schedule
@@ -231,27 +228,48 @@ if __name__ == "__main__":
 	  # Write TensorBoard logs to `./logs` directory
 	  tf.keras.callbacks.TensorBoard(log_dir=logs, write_images=True),
 	  tf.keras.callbacks.ModelCheckpoint(filepath=logs, save_weights_only=True),
-	  #tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=20),
-	  tf.keras.callbacks.LearningRateScheduler(scheduler),
+	  tf.keras.callbacks.EarlyStopping(monitor='val_loss', patience=10, verbose=1),
+	  tf.keras.callbacks.LearningRateScheduler(scheduler, verbose=1),
 	]
-
 	# Make Dataset
-	x_train, y_train, x_test, y_test, x_val, y_val = dataset()
+	x_train, y_train, x_test, y_test = dataset()
 
-	# Data Augmentation
-	train_dataset = tf.data.Dataset.from_tensor_slices((x_train, y_train)).batch(Batch_size).shuffle(10000)
-	train_dataset = train_dataset.map(lambda x,y: (tf.cast(x,tf.float32) / 255., y))
-	# train_dataset = train_dataset.map(lambda x,y: (tf.image.pad_to_bounding_box(x, 4, 4, 40, 40), y))
-	# train_dataset = train_dataset.map(lambda x,y: (tf.image.random_crop(x, [Batch_size, 32, 32, 3]), y))
-	train_dataset = train_dataset.map(lambda x,y: (tf.image.random_flip_left_right(x), y))
-	train_dataset = train_dataset.repeat()
+	# as if you want to use generaotr, input 'generator_use' valuable to 'True'
+	if generator_use:
+		def preprocessing(img):
+			img = tf.cast(img,tf.float32) / 255.
+			img = tf.image.pad_to_bounding_box(img, 4, 4, 40, 40)
+			img = tf.image.random_crop(img, [32, 32, 3])
+			img = tf.image.random_flip_left_right(img)
+			return img
 
-	validation_dataset = tf.data.Dataset.from_tensor_slices((x_val, y_val)).batch(Batch_size).shuffle(10000)
-	validation_dataset = validation_dataset.map(lambda x,y: (tf.cast(x,tf.float32) / 255., y))
-	validation_dataset = validation_dataset.repeat()
+		datagen = ImageDataGenerator(
+			preprocessing_function = preprocessing,
+			validation_split = val_num/train_num
+			)
 
-	test_dataset = tf.data.Dataset.from_tensor_slices((x_test, y_test)).batch(Batch_size)
-	test_dataset = test_dataset.map(lambda x, y: (tf.cast(x, tf.float32) / 255, y))
+		datagen.fit(x_train)
+
+		train_dataset = datagen.flow(x_train, y_train, batch_size=Batch_size)
+		validation_dataset = datagen.flow(x_train, y_train, batch_size=Batch_size,  subset='validation')
+
+	else :
+		# Data split
+		Full_dataset = tf.data.Dataset.from_tensor_slices((x_train, y_train)).shuffle(10000)
+		Full_dataset = Full_dataset.map(lambda x,y: (tf.cast(x,tf.float32) / 255., y))
+		validation_dataset = Full_dataset.take(val_num)
+		train_dataset = Full_dataset.skip(val_num)
+		
+
+		# Train dataset Data Augmentation
+		train_dataset = train_dataset.map(lambda x,y: (tf.image.pad_to_bounding_box(x, 4, 4, 40, 40), y))
+		train_dataset = train_dataset.map(lambda x,y: (tf.image.random_crop(x, [32, 32, 3]), y))
+		train_dataset = train_dataset.map(lambda x,y: (tf.image.random_flip_left_right(x), y))
+		train_dataset = train_dataset.batch(Batch_size).repeat()
+
+		# Validation data set
+		validation_dataset = validation_dataset.batch(Batch_size).repeat()
+
 
 	## View Data augmentation image.
 	# for i, element in enumerate(train_dataset):
@@ -268,20 +286,14 @@ if __name__ == "__main__":
 
 	# Make Model
 	model = Resnet(model_size, 'resnet')
-
+	
 	# compiling
-	compiles = model.compile(decay)
+	compiles = model.compile(momentum, decay)
 
 	# training
 	# Iter 64k 
 	# Batch 64 -> Paper's batch is 128 with 2-gpu. Use 64 batch size because my gpu is 1.
 	# Trainset 45k
 	# Batch * Trainset / Iter  => 64 * 45000 / 64000 = 45 epochs
-	fit = model.fit(train_dataset, Epoch, steps_per_epoch, validation_dataset, 80, callbacks)
-
-	# # Model evaluate
-	# results = model.evaluate(test_dataset)
-	# print('test loss: {:0.4f}\ntest acc: {:0.4f}'.format(results[0], results[1]))
-
-	# tf.summary.scalar('test_acc', data=results[1])
-	# tf.summary.scalar('test_loss', data=results[0])
+	fit = model.fit(train_dataset, Epoch, steps_per_epoch, validation_dataset, steps_val, callbacks)
+	print("Training End.")
